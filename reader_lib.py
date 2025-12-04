@@ -56,6 +56,8 @@ def _normalize_sql(sql: str) -> str:
     s = re.sub(r"_x000d__x000a_", " ", s)
     s = re.sub(r"_x000d_", " ", s)
     s = re.sub(r"_x000a_", " ", s)
+    # Replace doubled quotes sometimes present in Excel XML
+    s = s.replace('""', '"')
     # Collapse whitespace
     s = re.sub(r"\s+", " ", s)
     return s.strip()
@@ -102,7 +104,7 @@ def extract_table_from_sql(sql: str) -> Optional[str]:
     return None
 
 
-def analyze_sql(sql: Optional[str]) -> Tuple[Optional[str], Optional[str], str]:
+def analyze_sql(sql: Optional[str], conn_dict: Optional[Dict[str, str]] = None, command_type: Optional[str] = None) -> Tuple[Optional[str], Optional[str], str]:
     """
     Analyze a SQL string to extract table and database where possible and
     classify whether it's a real SQL Server query.
@@ -118,6 +120,18 @@ def analyze_sql(sql: Optional[str]) -> Tuple[Optional[str], Optional[str], str]:
     is_sql = bool(re.search(r"\b(select|insert|update|delete|with)\b", lower)) and (
         bool(re.search(r"\bfrom\b", lower)) or bool(re.search(r"\binto\b", lower))
     )
+    # If commandType indicates table or command-only and identifier looks like db.schema.table, treat as SQL
+    if not is_sql and (command_type in {"1", "2", "3", "Table"}):
+        if re.search(r"(?is)\b[a-zA-Z0-9_$]+\s*\.\s*[a-zA-Z0-9_$]+\s*\.\s*[a-zA-Z0-9_$]+", lower) or \
+           re.search(r"(?is)\"[^\"]+\"\s*\.\s*\"[^\"]+\"\s*\.\s*\"[^\"]+\"", sql_norm):
+            is_sql = True
+    # Provider hint
+    if not is_sql and conn_dict:
+        provider = (conn_dict.get("provider") or "").lower()
+        if "sqloledb" in provider or "sqlncli" in provider:
+            # If provider is SQL Server and we have a plausible identifier or any SELECT
+            if re.search(r"\bselect\b", lower) or re.search(r"\bfrom\b", lower) or re.search(r"\.[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+", lower):
+                is_sql = True
 
     table = extract_table_from_sql(sql_norm)
     database: Optional[str] = None
@@ -205,7 +219,10 @@ def parse_connections_from_xlsx(xlsx_path: str) -> Tuple[List[Dict[str, Optional
             "connection": conn_name,
             "database": database,
             "table_name": table_name,
-            "sql_query": sql_query
+            "sql_query": sql_query,
+            "command_type": command_type,
+            "connection_string": conn_str,
+            "provider": conn_dict.get("provider") if dbpr is not None else None,
         })
 
     return entries, None

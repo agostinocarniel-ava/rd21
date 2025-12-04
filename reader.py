@@ -77,7 +77,19 @@ def main() -> int:
                     "sql_query": e.get("sql_query"),
                 }
                 # Post-process to refine table/database and mark SQL queries
-                table_pp, db_pp, sql_flag = analyze_sql(row.get("sql_query"))
+                # Build conn_dict again from the stored connection_string for richer analysis
+                conn_dict_local = None
+                try:
+                    from reader_lib import parse_connection_string  # reuse helper
+                    conn_dict_local = parse_connection_string(e.get("connection_string") or "")
+                except Exception:
+                    conn_dict_local = None
+
+                table_pp, db_pp, sql_flag = analyze_sql(
+                    row.get("sql_query"),
+                    conn_dict=conn_dict_local,
+                    command_type=e.get("command_type")
+                )
                 row["sql_si_no"] = sql_flag
                 if table_pp and not row.get("table_name"):
                     row["table_name"] = table_pp
