@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import zipfile
 import xml.etree.ElementTree as ET
 
@@ -36,6 +36,19 @@ def extract_database_from_conn_dict(conn_dict: Dict[str, str]) -> Optional[str]:
     return None
 
 
+def _clean_identifier(identifier: str) -> str:
+    """Remove brackets or quotes from an identifier and collapse whitespace."""
+    ident = identifier.strip()
+    # Remove surrounding [] " `
+    if ident.startswith("[") and ident.endswith("]"):
+        ident = ident[1:-1]
+    elif ident.startswith('"') and ident.endswith('"'):
+        ident = ident[1:-1]
+    elif ident.startswith('`') and ident.endswith('`'):
+        ident = ident[1:-1]
+    return ident.strip()
+
+
 def extract_table_from_sql(sql: str) -> Optional[str]:
     """
     Best-effort extraction of first table after FROM in a SQL query.
@@ -52,10 +65,10 @@ def extract_table_from_sql(sql: str) -> Optional[str]:
         \bfrom\b
         \s+
         (
-            (?:\[[^\]]+\])|        # [schema].[table] or [table]
-            (?:"[^"]+")|           # "schema"."table" or "table"
-            (?:`[^`]+`)|           # `schema`.`table` or `table`
-            (?:[a-zA-Z0-9_$.]+)    # schema.table or table
+            (?:\[[^\]]+\](?:\s*\.\s*\[[^\]]+\]){0,3})|   # [db].[schema].[table]
+            (?:(?:"[^"]+")(?:\s*\.\s*"[^"]+"){0,3})|     # "db"."schema"."table"
+            (?:(?:`[^`]+`)(?:\s*\.\s*`[^`]+`){0,3})|          # `db`.`schema`.`table`
+            (?:[a-zA-Z0-9_$]+(?:\s*\.\s*[a-zA-Z0-9_$]+){0,3}) # db.schema.table
         )
     """
     m = re.search(pattern, sql)
@@ -64,11 +77,55 @@ def extract_table_from_sql(sql: str) -> Optional[str]:
         val = m.group(1).strip()
         # If multiple parts follow (e.g., alias), stop at next whitespace or punctuation
         val = re.split(r"[\s;]", val)[0]
-        return val
+        # Normalize identifier parts
+        parts = [
+            _clean_identifier(p)
+            for p in re.split(r"\s*\.\s*", val) if p.strip()
+        ]
+        # Return most specific name (schema.table if available, else table)
+        if len(parts) >= 2:
+            return f"{parts[-2]}.{parts[-1]}"
+        return parts[-1] if parts else None
     return None
 
 
-def parse_connections_from_xlsx(xlsx_path: str) -> List[Dict[str, Optional[str]]]:
+def analyze_sql(sql: Optional[str]) -> Tuple[Optional[str], Optional[str], str]:
+    """
+    Analyze a SQL string to extract table and database where possible and
+    classify whether it's a real SQL Server query.
+
+    Returns (table_name, database, sql_si_no) where sql_si_no is "si" or "no".
+    """
+    if not sql:
+        return None, None, "no"
+
+    lower = sql.lower()
+    # Heuristic to consider as SQL Server query
+    is_sql = bool(re.search(r"\b(select|insert|update|delete|with)\b", lower)) and (
+        bool(re.search(r"\bfrom\b", lower)) or bool(re.search(r"\binto\b", lower))
+    )
+
+    table = extract_table_from_sql(sql)
+    database: Optional[str] = None
+
+    # Try to extract database from a three- or four-part identifier
+    if table:
+        parts = table.split(".")
+        # parts may be schema.table or db.schema.table
+        if len(parts) == 3:
+            database = parts[0]
+        elif len(parts) == 2:
+            database = None
+
+    # Also check for "use <db>" or "database.dbo.table" in the original SQL
+    m_use = re.search(r"\buse\s+([\w$]+)\b", lower)
+    if m_use and not database:
+        database = m_use.group(1)
+
+    return table, database, ("si" if is_sql else "no")
+
+
+def parse_connections_from_xlsx(xlsx_path: str) -> Tuple[List[Dict[str, Optional[str]]], Optional[str]]:
     """
     Open an .xlsx file, read xl/connections.xml, and extract connection info.
     Returns a list of dicts with keys: connection, database, table_name, sql_query.
@@ -78,20 +135,20 @@ def parse_connections_from_xlsx(xlsx_path: str) -> List[Dict[str, Optional[str]]
         with zipfile.ZipFile(xlsx_path, "r") as zf:
             if "xl/connections.xml" not in zf.namelist():
                 logger.debug(f"No xl/connections.xml in {xlsx_path}")
-                return entries
+                return entries, None
             xml_bytes = zf.read("xl/connections.xml")
     except zipfile.BadZipFile:
         logger.warning(f"BadZipFile: {xlsx_path}")
-        return entries
+        return entries, "BadZipFile"
     except Exception as e:
         logger.warning(f"Failed to open {xlsx_path}: {e}")
-        return entries
+        return entries, type(e).__name__
 
     try:
         root = ET.fromstring(xml_bytes)
     except Exception as e:
         logger.warning(f"Failed to parse connections.xml in {xlsx_path}: {e}")
-        return entries
+        return entries, type(e).__name__
 
     # Root is <connections>, children are <connection>
     for conn in root.findall("ssml:connection", NS):
@@ -139,7 +196,7 @@ def parse_connections_from_xlsx(xlsx_path: str) -> List[Dict[str, Optional[str]]
             "sql_query": sql_query
         })
 
-    return entries
+    return entries, None
 
 
 def walk_xlsx_files(root_dir: str) -> List[str]:
@@ -161,7 +218,15 @@ def write_excel_report(rows: List[Dict[str, Optional[str]]], output_path: str) -
     ws = wb.active
     ws.title = "Connections"
 
-    headers = ["folder_name", "file_name", "connection", "database", "table_name", "sql query"]
+    headers = [
+        "folder_name",
+        "file_name",
+        "connection",
+        "database",
+        "table_name",
+        "sql query",
+        "SQL si/no",
+    ]
     ws.append(headers)
 
     for row in rows:
@@ -171,7 +236,8 @@ def write_excel_report(rows: List[Dict[str, Optional[str]]], output_path: str) -
             row.get("connection") or "",
             row.get("database") or "",
             row.get("table_name") or "",
-            row.get("sql_query") or ""
+            row.get("sql_query") or "",
+            row.get("sql_si_no") or ""
         ])
 
     try:

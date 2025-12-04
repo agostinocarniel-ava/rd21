@@ -24,6 +24,7 @@ from reader_lib import (
     walk_xlsx_files,
     parse_connections_from_xlsx,
     write_excel_report,
+    analyze_sql,
 )
 from config import EXCEL_ROOT_DIR, OUTPUT_REPORT_PATH
 
@@ -56,22 +57,34 @@ def main() -> int:
     logger.info(f"Found {len(files)} .xlsx files")
 
     report_rows: List[Dict[str, Optional[str]]] = []
+    error_entries: List[Dict[str, str]] = []
     for fpath in files:
         try:
-            entries = parse_connections_from_xlsx(fpath)
+            entries, err = parse_connections_from_xlsx(fpath)
+            if err:
+                error_entries.append({"file_path": fpath, "error_type": err})
             if not entries:
                 logger.debug(f"No connections found in {fpath}")
                 continue
 
             for e in entries:
-                report_rows.append({
+                row = {
                     "folder_name": os.path.relpath(os.path.dirname(fpath), start=root_dir),
                     "file_name": os.path.basename(fpath),
                     "connection": e.get("connection"),
                     "database": e.get("database"),
                     "table_name": e.get("table_name"),
                     "sql_query": e.get("sql_query"),
-                })
+                }
+                # Post-process to refine table/database and mark SQL queries
+                table_pp, db_pp, sql_flag = analyze_sql(row.get("sql_query"))
+                row["sql_si_no"] = sql_flag
+                if table_pp and not row.get("table_name"):
+                    row["table_name"] = table_pp
+                if db_pp and not row.get("database"):
+                    row["database"] = db_pp
+
+                report_rows.append(row)
         except Exception as ex:
             logger.warning(f"Failed to process {fpath}: {ex}")
 
@@ -86,6 +99,21 @@ def main() -> int:
     except Exception as e:
         logger.error(f"Could not write report: {e}")
         return 3
+
+    # Write error report (all types) if any
+    if error_entries:
+        err_report_path = os.path.splitext(output_path)[0] + "_errors.csv"
+        try:
+            with open(err_report_path, "w", encoding="utf-8") as fh:
+                fh.write("file_path,error_type\n")
+                for item in error_entries:
+                    # CSV-safe: wrap in quotes if needed
+                    fp = item["file_path"].replace('"', '""')
+                    et = item["error_type"].replace('"', '""')
+                    fh.write(f'"{fp}","{et}"\n')
+            logger.info(f"Error report written to: {err_report_path}")
+        except Exception as e:
+            logger.warning(f"Failed to write error report: {e}")
 
     return 0
 
