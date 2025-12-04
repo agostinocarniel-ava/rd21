@@ -49,6 +49,18 @@ def _clean_identifier(identifier: str) -> str:
     return ident.strip()
 
 
+def _normalize_sql(sql: str) -> str:
+    """Normalize SQL by replacing Excel XML placeholders and collapsing whitespace."""
+    s = sql or ""
+    # Replace Excel XML newline placeholders
+    s = re.sub(r"_x000d__x000a_", " ", s)
+    s = re.sub(r"_x000d_", " ", s)
+    s = re.sub(r"_x000a_", " ", s)
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
 def extract_table_from_sql(sql: str) -> Optional[str]:
     """
     Best-effort extraction of first table after FROM in a SQL query.
@@ -61,6 +73,7 @@ def extract_table_from_sql(sql: str) -> Optional[str]:
         return sql.strip()
 
     # Try to capture table after FROM
+    sql_norm = _normalize_sql(sql)
     pattern = r"""(?isx)
         \bfrom\b
         \s+
@@ -71,7 +84,7 @@ def extract_table_from_sql(sql: str) -> Optional[str]:
             (?:[a-zA-Z0-9_$]+(?:\s*\.\s*[a-zA-Z0-9_$]+){0,3}) # db.schema.table
         )
     """
-    m = re.search(pattern, sql)
+    m = re.search(pattern, sql_norm)
     if m:
         # Clean bracketed identifier like [dbo].[Table]
         val = m.group(1).strip()
@@ -99,23 +112,22 @@ def analyze_sql(sql: Optional[str]) -> Tuple[Optional[str], Optional[str], str]:
     if not sql:
         return None, None, "no"
 
-    lower = sql.lower()
+    sql_norm = _normalize_sql(sql or "")
+    lower = sql_norm.lower()
     # Heuristic to consider as SQL Server query
     is_sql = bool(re.search(r"\b(select|insert|update|delete|with)\b", lower)) and (
         bool(re.search(r"\bfrom\b", lower)) or bool(re.search(r"\binto\b", lower))
     )
 
-    table = extract_table_from_sql(sql)
+    table = extract_table_from_sql(sql_norm)
     database: Optional[str] = None
 
     # Try to extract database from a three- or four-part identifier
     if table:
-        parts = table.split(".")
+        parts = [_clean_identifier(p) for p in table.split(".")]
         # parts may be schema.table or db.schema.table
-        if len(parts) == 3:
+        if len(parts) >= 3:
             database = parts[0]
-        elif len(parts) == 2:
-            database = None
 
     # Also check for "use <db>" or "database.dbo.table" in the original SQL
     m_use = re.search(r"\buse\s+([\w$]+)\b", lower)
