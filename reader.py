@@ -25,6 +25,7 @@ from reader_lib import (
     parse_connections_from_xlsx,
     write_excel_report,
     analyze_sql,
+    write_summary_report,
 )
 from config import EXCEL_ROOT_DIR, OUTPUT_REPORT_PATH
 
@@ -126,6 +127,14 @@ def main() -> int:
             logger.info(f"Error report written to: {err_report_path}")
         except Exception as e:
             logger.warning(f"Failed to write error report: {e}")
+
+    # Post-processing summary Excel
+    try:
+        summary_path = os.path.splitext(output_path)[0] + "_summary.xlsx"
+        write_summary_report(report_rows, error_entries, summary_path)
+        logger.info(f"Summary report written to: {summary_path}")
+    except Exception as e:
+        logger.warning(f"Failed to write summary report: {e}")
 
     return 0
 

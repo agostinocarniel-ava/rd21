@@ -274,3 +274,88 @@ def write_excel_report(rows: List[Dict[str, Optional[str]]], output_path: str) -
     except Exception as e:
         logger.error(f"Failed to save Excel report to {output_path}: {e}")
         raise
+
+
+def write_summary_report(
+    rows: List[Dict[str, Optional[str]]],
+    error_entries: List[Dict[str, str]],
+    output_summary_path: str,
+) -> None:
+    """Generate a post-processing Excel summary with key metrics and groupings."""
+    if Workbook is None:
+        raise RuntimeError("openpyxl is required. Install with: pip install openpyxl")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+
+    # Metrics
+    total_xlsx_read = len({(r.get("folder_name"), r.get("file_name")) for r in rows})
+    total_errors = len(error_entries)
+
+    # Unique databases and tables
+    dbs = { (r.get("database") or "").strip().lower() for r in rows if r.get("database") }
+    tables = { (r.get("table_name") or "").strip().lower() for r in rows if r.get("table_name") }
+
+    # Tables without database
+    tables_no_db = { (r.get("table_name") or "").strip().lower()
+                     for r in rows if r.get("table_name") and not r.get("database") }
+
+    # SQL queries without database (unique by text)
+    sql_no_db = { (r.get("sql_query") or "").strip()
+                  for r in rows if r.get("sql_query") and not r.get("database") }
+
+    # Grouping: database -> unique tables count
+    db_to_tables: Dict[str, set] = {}
+    for r in rows:
+        db = (r.get("database") or "").strip()
+        tbl = (r.get("table_name") or "").strip()
+        if not db:
+            continue
+        db_key = db.lower()
+        if db_key not in db_to_tables:
+            db_to_tables[db_key] = set()
+        if tbl:
+            db_to_tables[db_key].add(tbl.lower())
+
+    # Unique xlsx to pay attention: missing db or missing table
+    attention_xlsx = { (r.get("folder_name"), r.get("file_name"))
+                       for r in rows if (not r.get("database") or not r.get("table_name")) }
+
+    # Per-xlsx issues: count those where any row lacks db or table or sql
+    from collections import defaultdict
+    xlsx_rows_map: Dict[tuple, List[Dict[str, Optional[str]]]] = defaultdict(list)
+    for r in rows:
+        xlsx_rows_map[(r.get("folder_name"), r.get("file_name"))].append(r)
+
+    xlsx_no_db = 0
+    xlsx_no_table = 0
+    xlsx_no_sql = 0
+    for key, rr in xlsx_rows_map.items():
+        if any((not x.get("database") or (isinstance(x.get("database"), str) and x.get("database").lower() == "query")) for x in rr):
+            xlsx_no_db += 1
+        if any((not x.get("table_name") or (isinstance(x.get("table_name"), str) and x.get("table_name").lower() == "query")) for x in rr):
+            xlsx_no_table += 1
+        if any(not x.get("sql_query") for x in rr):
+            xlsx_no_sql += 1
+
+    # Write metrics
+    ws.append(["Metric", "Value"])
+    ws.append(["n. di file .xlsx letti", total_xlsx_read])
+    ws.append(["n. di file che hanno generato errore", total_errors])
+    ws.append(["n. di database univoci identificati", len(dbs)])
+    ws.append(["n. di tabelle univoche identificate", len(tables)])
+    ws.append(["n. di tabelle univoche senza database", len(tables_no_db)])
+    ws.append(["n. di query sql univoche senza database", len(sql_no_db)])
+    ws.append(["N. di xlsx univoci da attenzionare (senza db o tabella)", len(attention_xlsx)])
+    ws.append(["N. di xlsx univoci (righe senza db)", xlsx_no_db])
+    ws.append(["N. di xlsx univoci (righe senza tabella)", xlsx_no_table])
+    ws.append(["N. di xlsx univoci (righe senza sql)", xlsx_no_sql])
+
+    # Blank row then grouping
+    ws.append(["", ""])
+    ws.append(["Nome Database", "tabelle univoche identificate"])
+    for db_key, tbls in sorted(db_to_tables.items()):
+        ws.append([db_key, len(tbls)])
+
+    wb.save(output_summary_path)
