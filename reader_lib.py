@@ -116,6 +116,13 @@ def analyze_sql(sql: Optional[str], conn_dict: Optional[Dict[str, str]] = None, 
 
     sql_norm = _normalize_sql(sql or "")
     lower = sql_norm.lower()
+    # If connection points to workbook-internal data (Power Query / Mashup), mark as non-SQL
+    if conn_dict:
+        src = (conn_dict.get("data source") or conn_dict.get("source") or "").strip().lower()
+        provider = (conn_dict.get("provider") or "").strip().lower()
+        if src == "$workbook$" or "mashup.oledb" in provider or "microsoft.mashup" in provider:
+            return extract_table_from_sql(_normalize_sql(sql or "")), None, "no"
+
     # Heuristic to consider as SQL Server query
     is_sql = bool(re.search(r"\b(select|insert|update|delete|with)\b", lower)) and (
         bool(re.search(r"\bfrom\b", lower)) or bool(re.search(r"\binto\b", lower))
