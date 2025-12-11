@@ -27,6 +27,7 @@ from reader_lib import (
     analyze_sql,
     write_summary_report,
 )
+from reader_lib_com import parse_connections_via_com
 from config import EXCEL_ROOT_DIR, OUTPUT_REPORT_PATH
 
 
@@ -44,6 +45,12 @@ def main() -> int:
         default=OUTPUT_REPORT_PATH,
         help="Output Excel file path. Defaults to config.OUTPUT_REPORT_PATH"
     )
+    parser.add_argument(
+        "--logic",
+        choices=["zipxml", "com"],
+        default="zipxml",
+        help="Choose business logic: 'zipxml' (read xl/connections.xml) or 'com' (xlwings/COM)."
+    )
     args = parser.parse_args()
 
     root_dir = os.path.abspath(args.input or EXCEL_ROOT_DIR)
@@ -59,9 +66,13 @@ def main() -> int:
 
     report_rows: List[Dict[str, Optional[str]]] = []
     error_entries: List[Dict[str, str]] = []
+    use_com = (args.logic == "com")
     for fpath in files:
         try:
-            entries, err = parse_connections_from_xlsx(fpath)
+            if use_com:
+                entries, err = parse_connections_via_com(fpath)
+            else:
+                entries, err = parse_connections_from_xlsx(fpath)
             if err:
                 error_entries.append({"file_path": fpath, "error_type": err})
             if not entries:
