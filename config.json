@@ -1,0 +1,24 @@
+{
+  "root": "./data",
+  "out": "./reports",
+  "excel": false,
+  "analysis_settings": {
+    "include_hidden_sheets": true,
+    "include_charts": true,
+    "include_named_ranges": true,
+    "max_connection_timeout": 30,
+    "detailed_table_analysis": true,
+    "export_query_formulas": true
+  },
+  "output_settings": {
+    "generate_json": true,
+    "generate_excel": true,
+    "include_timestamps": true,
+    "compress_output": false
+  },
+  "logging": {
+    "level": "INFO",
+    "log_to_file": false,
+    "log_file_path": "excel_analyzer.log"
+  }
+}
