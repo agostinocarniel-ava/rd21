@@ -13,6 +13,7 @@ from pathlib import Path
 import win32com.client as win32
 from typing import Dict, List, Any, Set, Tuple
 import logging
+from config import CONFIG, resolve_paths
 
 
 def parse_database_info_from_formula(formula: str) -> Dict[str, Any]:
@@ -1078,15 +1079,8 @@ def main():
     parser.add_argument("--excel", dest="excel", action="store_true", help="Genera anche report Excel oltre al JSON")
     args = parser.parse_args()
 
-    # Carica configurazione da file separato (config.json) se presente
-    config_path = Path(__file__).with_name('config.json')
-    config = {}
-    if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except Exception as e:
-            logger.warning(f"Impossibile leggere config.json: {e}")
+    # Carica configurazione centralizzata da config.py
+    config = resolve_paths(CONFIG)
 
     # Applica priorità: CLI > config.json > default
     root_cfg = args.root if args.root else config.get('root', '.')
